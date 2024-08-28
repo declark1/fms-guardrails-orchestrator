@@ -1,5 +1,8 @@
 #![allow(dead_code)]
-use std::sync::Arc;
+use std::{
+    collections::{btree_map, BTreeMap},
+    sync::Arc,
+};
 
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::instrument;
@@ -210,28 +213,26 @@ impl AggregationActor {
     }
 
     async fn handle(&mut self, msg: AggregationActorMessage) {
-        // TODO: support overlapping spans from different chunkers?
         let chunk = msg.chunk;
         let detections = msg.detections;
 
         // Add to tracker
         let span: Span = (chunk.start_index, chunk.processed_index);
-        self.tracker.push((span, detections));
+        self.tracker
+            .insert(span, TrackerEntry::new(chunk, detections));
 
-        // Find current detections for this span
-        let current = self.tracker.find_by_span_start(chunk.start_index);
-
-        //debug!(?self.tracker, "tracker snapshot");
-
-        // If we have results from all detectors, send to result actor
-        if current.len() == self.n_detectors {
-            let detections = self
-                .tracker
-                .take(current)
-                .into_iter()
-                .flat_map(|(_, detections)| detections)
-                .collect::<Vec<_>>();
-            let _ = self.result_actor.send(chunk, detections).await;
+        // Check if we have all detections for the first span
+        if self
+            .tracker
+            .first()
+            .is_some_and(|first| first.detections.len() == self.n_detectors)
+        {
+            if let Some((_key, value)) = self.tracker.pop_first() {
+                let chunk = value.chunk;
+                let detections = value.detections.into_iter().flatten().collect();
+                // Send to result actor
+                let _ = self.result_actor.send(chunk, detections).await;
+            }
         }
     }
 }
@@ -365,48 +366,73 @@ impl GenerationActorHandle {
 }
 
 #[derive(Debug, Clone)]
+struct TrackerEntry {
+    pub chunk: Chunk,
+    pub detections: Vec<Detections>,
+}
+
+impl TrackerEntry {
+    pub fn new(chunk: Chunk, detections: Detections) -> Self {
+        Self {
+            chunk,
+            detections: vec![detections],
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct Tracker {
-    state: Vec<Option<(Span, Detections)>>,
+    state: BTreeMap<Span, TrackerEntry>,
 }
 
 impl Tracker {
     pub fn new() -> Self {
-        Self { state: Vec::new() }
+        Self {
+            state: BTreeMap::new(),
+        }
     }
 
-    pub fn push(&mut self, value: (Span, Detections)) {
-        self.state.push(Some(value));
+    pub fn insert(&mut self, key: Span, value: TrackerEntry) {
+        match self.state.entry(key) {
+            btree_map::Entry::Vacant(entry) => {
+                // New span, insert entry with chunk and detections
+                entry.insert(value);
+            }
+            btree_map::Entry::Occupied(mut entry) => {
+                // Existing span, extend detections with new detections
+                entry.get_mut().detections.extend(value.detections);
+            }
+        }
     }
 
-    pub fn find_by_span_start(&self, start: i64) -> Vec<usize> {
-        self.state
-            .iter()
-            .enumerate()
-            .filter(|(_, value)| value.as_ref().is_some_and(|(span, _)| span.0 == start))
-            .map(|(i, _)| i)
-            .collect::<Vec<_>>()
+    /// Returns the key-value pair of the first span.
+    pub fn first_key_value(&self) -> Option<(&Span, &TrackerEntry)> {
+        self.state.first_key_value()
     }
 
-    pub fn take(&mut self, indices: Vec<usize>) -> Vec<(Span, Detections)> {
-        indices
-            .into_iter()
-            .filter_map(|i| self.state.get_mut(i).unwrap().take())
-            .collect()
+    /// Returns the value of the first span.
+    pub fn first(&self) -> Option<&TrackerEntry> {
+        self.state.first_key_value().map(|(_, value)| value)
     }
-}
 
-impl std::ops::Deref for Tracker {
-    type Target = [Option<(Span, Detections)>];
-
-    fn deref(&self) -> &Self::Target {
-        &self.state
+    /// Removes and returns the key-value pair of the first span.
+    pub fn pop_first(&mut self) -> Option<(Span, TrackerEntry)> {
+        self.state.pop_first()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
-    use crate::{models::TokenClassificationResult, pb::caikit_data_model::nlp::Token};
+    use crate::{
+        models::{FinishReason, TokenClassificationResult},
+        pb::{
+            caikit::runtime::chunkers::ChunkerTokenizationStreamResult,
+            caikit_data_model::nlp::Token,
+        },
+    };
 
     fn get_detection_obj(
         span: Span,
@@ -480,5 +506,127 @@ mod tests {
             chunk_count += 1;
         }
         assert_eq!(chunk_count, chunks.len());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_aggregation_actor_out_of_order_chunks() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // Create generations
+        let generations = [
+            ClassifiedGeneratedTextStreamResult {
+                generated_text: Some(
+                    "Once upon a time, there was a little girl named Parker.".into(),
+                ),
+                finish_reason: Some(FinishReason::NotFinished),
+                generated_token_count: Some(16),
+                input_token_count: 15,
+                processed_index: Some(55),
+                start_index: Some(0),
+                ..Default::default()
+            },
+            ClassifiedGeneratedTextStreamResult {
+                generated_text: Some(" She loved to play with her toys.".into()),
+                finish_reason: Some(FinishReason::MaxTokens),
+                generated_token_count: Some(10),
+                processed_index: Some(88),
+                start_index: Some(55),
+                ..Default::default()
+            },
+        ];
+
+        // Create chunks
+        let chunks = [
+            ChunkerTokenizationStreamResult {
+                results: vec![Token {
+                    start: 0,
+                    end: 55,
+                    text: "Once upon a time, there was a little girl named Parker.".into(),
+                }],
+                token_count: 0,
+                processed_index: 55,
+                start_index: 0,
+                input_start_index: 0,
+                input_end_index: 1,
+            },
+            ChunkerTokenizationStreamResult {
+                results: vec![Token {
+                    start: 55,
+                    end: 88,
+                    text: " She loved to play with her toys.".into(),
+                }],
+                token_count: 0,
+                processed_index: 88,
+                start_index: 70,
+                input_start_index: 1,
+                input_end_index: 2,
+            },
+        ];
+
+        // Create detection streams
+        let (pii_tx, pii_rx) = mpsc::channel::<(Chunk, Detections)>(32);
+        let (hap_tx, hap_rx) = mpsc::channel::<(Chunk, Detections)>(32);
+        let detection_streams = vec![("pii".to_string(), pii_rx), ("hap".to_string(), hap_rx)];
+
+        // Create result channel
+        let (result_tx, mut result_rx) = mpsc::channel(32);
+
+        // Create actors
+        let generation_actor = Arc::new(GenerationActorHandle::new());
+        let result_actor = ResultActorHandle::new(generation_actor.clone(), result_tx);
+        let aggregation_actor = Arc::new(AggregationActorHandle::new(
+            result_actor,
+            detection_streams.len(),
+        ));
+
+        // Spawn task to send generations to generation actor
+        println!("spawning task to send generations to generation actor");
+        tokio::spawn(async move {
+            for generation in generations {
+                let _ = generation_actor.put(generation).await;
+            }
+        });
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        // Spawn tasks to process detection streams concurrently
+        println!("spawning tasks to process detection streams");
+        for (_detector_id, mut stream) in detection_streams {
+            let aggregation_actor = aggregation_actor.clone();
+            tokio::spawn(async move {
+                while let Some((chunk, detections)) = stream.recv().await {
+                    // Send to aggregation actor
+                    aggregation_actor.send(chunk, detections).await;
+                }
+            });
+        }
+
+        // Send detections to detection streams manually
+        // to simulate an out-of-order scenario
+        println!("spawning task to send detections to detection streams");
+        tokio::spawn(async move {
+            // Send chunk 2 result to detector 1 stream
+            let _ = pii_tx.send((chunks[0].clone(), vec![])).await;
+            // Send chunk 2 result to detector 2 stream
+            let _ = hap_tx.send((chunks[0].clone(), vec![])).await;
+
+            tokio::time::sleep(Duration::from_secs(2)).await;
+
+            // Send chunk 1 result to detector 2 stream
+            let _ = hap_tx.send((chunks[1].clone(), vec![])).await;
+            // Send chunk 1 result to detector 1 stream
+            let _ = pii_tx.send((chunks[1].clone(), vec![])).await;
+        });
+
+        // Collect results
+        let mut results = Vec::new();
+        println!("collecting results");
+        while let Some(result) = result_rx.recv().await {
+            results.push(result);
+        }
+
+        // Validate response order
+        //println!("results: {results:?}");
+
+        Ok(())
     }
 }
