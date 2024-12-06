@@ -23,7 +23,6 @@ use std::{
     io::BufReader,
     net::SocketAddr,
     path::PathBuf,
-    pin::Pin,
     sync::Arc,
 };
 
@@ -38,7 +37,7 @@ use axum::{
     Json, Router,
 };
 use axum_extra::extract::WithRejection;
-use futures::{stream, Stream, StreamExt, TryStreamExt};
+use futures::{stream, Stream, StreamExt};
 use hyper::body::Incoming;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use opentelemetry::trace::TraceContextExt;
@@ -54,10 +53,7 @@ use webpki::types::{CertificateDer, PrivateKeyDer};
 
 use crate::{
     clients::openai::{ChatCompletionsRequest, ChatCompletionsResponse},
-    models::{
-        self, ClassifiedGeneratedTextResult, InfoParams, InfoResponse,
-        StreamingContentDetectionRequest, StreamingContentDetectionResponse,
-    },
+    models::{self, InfoParams, InfoResponse, StreamingContentDetectionRequest},
     orchestrator::{
         self, ChatCompletionsDetectionTask, ChatDetectionTask, ClassificationWithGenTask,
         ContextDocsDetectionTask, DetectionOnGenerationTask, GenerationWithDetectionTask,
