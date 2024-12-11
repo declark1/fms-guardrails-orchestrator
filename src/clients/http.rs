@@ -26,8 +26,7 @@ use hyper_rustls::HttpsConnector;
 use hyper_timeout::TimeoutConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use serde::{de::DeserializeOwned, Serialize};
-use tower::timeout::Timeout;
-use tower::Service;
+use tower::{timeout::Timeout, Service};
 use tower_http::{
     classify::{
         NeverClassifyEos, ServerErrorsAsFailures, ServerErrorsFailureClass, SharedClassifier,
@@ -234,14 +233,20 @@ impl HttpClient {
     }
 
     /// This is sectioned off to allow for testing.
-    pub(super) async fn http_response_to_health_check_result(
-        res: Result<TracedResponse, Error>,
-    ) -> HealthCheckResult {
+    pub(super) async fn http_response_to_health_check_result<B>(
+        res: Result<http::Response<B>, Error>,
+    ) -> HealthCheckResult
+    where
+        B: Body,
+        B::Error: std::fmt::Debug,
+    {
         match res {
             Ok(response) => {
-                let response = Response::from(response);
                 if response.status() == StatusCode::OK {
-                    if let Ok(body) = response.json::<OptionalHealthCheckResponseBody>().await {
+                    let body = response.into_body().collect().await.unwrap().to_bytes();
+                    if let Ok(body) =
+                        serde_json::from_slice::<OptionalHealthCheckResponseBody>(&body)
+                    {
                         // If the service provided a body, we only anticipate a minimal health status and optional reason.
                         HealthCheckResult {
                             status: body.status.clone(),
@@ -301,12 +306,11 @@ impl HttpClient {
         let req = Request::get(self.health_url.as_uri())
             .body(BoxBody::default())
             .unwrap();
-        let res = self.inner.clone().call(req).await;
-        Self::http_response_to_health_check_result(res.map(Into::into).map_err(|e| Error::Http {
+        let res = self.inner.clone().call(req).await.map_err(|e| Error::Http {
             code: StatusCode::INTERNAL_SERVER_ERROR,
             message: format!("sending client health request failed: {}", e),
-        }))
-        .await
+        });
+        Self::http_response_to_health_check_result(res).await
     }
 }
 

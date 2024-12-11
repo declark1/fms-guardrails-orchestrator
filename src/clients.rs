@@ -37,8 +37,7 @@ use hyper::{
 use hyper_timeout::TimeoutConnector;
 use hyper_util::rt::TokioExecutor;
 use tonic::{metadata::MetadataMap, Request};
-use tower::timeout::TimeoutLayer;
-use tower::ServiceBuilder;
+use tower::{timeout::TimeoutLayer, ServiceBuilder};
 use tower_http::{
     classify::{GrpcErrorsAsFailures, GrpcFailureClass, SharedClassifier},
     trace::{
@@ -53,7 +52,10 @@ use url::Url;
 use crate::{
     config::{ServiceConfig, Tls},
     health::HealthCheckResult,
-    utils::{tls, trace::current_trace_id, trace::with_traceparent_header},
+    utils::{
+        tls,
+        trace::{current_trace_id, with_traceparent_header},
+    },
 };
 
 pub mod errors;
@@ -576,17 +578,18 @@ mod tests {
     use errors::grpc_to_http_code;
     use http_body_util::BodyExt;
     use hyper::{http, StatusCode};
-    use tower_http::trace::ResponseBody;
 
     use super::*;
     use crate::{
-        clients::http::TracedResponse,
         health::{HealthCheckResult, HealthStatus},
         pb::grpc::health::v1::{health_check_response::ServingStatus, HealthCheckResponse},
     };
 
-    async fn mock_http_response(status: StatusCode, body: &str) -> Result<TracedResponse, Error> {
-        let response = http::Response::builder()
+    async fn mock_http_response(
+        status: StatusCode,
+        body: &str,
+    ) -> Result<http::Response<BoxBody<Bytes, hyper::Error>>, Error> {
+        Ok(http::Response::builder()
             .status(status)
             .body(
                 body.to_string()
@@ -598,10 +601,7 @@ mod tests {
                     })
                     .boxed(),
             )
-            .unwrap();
-
-        // Incorrect types here!
-        Ok(response)
+            .unwrap())
     }
 
     async fn mock_grpc_response(
