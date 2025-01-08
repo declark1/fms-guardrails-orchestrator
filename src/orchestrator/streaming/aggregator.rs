@@ -370,7 +370,7 @@ impl GenerationActorHandle {
 }
 
 #[derive(Debug, Clone)]
-struct TrackerEntry {
+pub struct TrackerEntry {
     pub chunk: Chunk,
     pub detections: Vec<Detections>,
 }
@@ -384,16 +384,14 @@ impl TrackerEntry {
     }
 }
 
-#[derive(Debug, Clone)]
-struct Tracker {
+#[derive(Default, Debug, Clone)]
+pub struct Tracker {
     state: BTreeMap<Span, TrackerEntry>,
 }
 
 impl Tracker {
     pub fn new() -> Self {
-        Self {
-            state: BTreeMap::new(),
-        }
+        Self::default()
     }
 
     pub fn insert(&mut self, key: Span, value: TrackerEntry) {
