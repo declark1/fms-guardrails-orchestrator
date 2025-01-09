@@ -441,6 +441,7 @@ async fn stream_content_detection(
         .into_body()
         .into_data_stream()
         .map(|result| {
+            // Deserialize and validate messages
             let msg = serde_json::from_slice::<StreamingContentDetectionRequest>(&result.unwrap())?;
             msg.validate()?;
             Ok(msg)
