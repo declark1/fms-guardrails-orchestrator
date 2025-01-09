@@ -143,12 +143,16 @@ impl Orchestrator {
 async fn extract_detectors(
     input_stream: &mut Peekable<ContentInputStream>,
 ) -> Result<HashMap<String, DetectorParams>, Error> {
-    // Get detector config from the first message
     // We can use Peekable to get a reference to it instead of consuming the message here
     // Peekable::peek() takes self: Pin<&mut Peekable<_>>, which is why we need to pin it
     // https://docs.rs/futures/latest/futures/stream/struct.Peekable.html
     if let Some(Ok(msg)) = Pin::new(input_stream).peek().await {
         if let Some(detectors) = &msg.detectors {
+            if detectors.is_empty() {
+                return Err(Error::Validation(
+                    "`detectors` must not be empty".to_string(),
+                ));
+            }
             return Ok(detectors.clone());
         }
     }
