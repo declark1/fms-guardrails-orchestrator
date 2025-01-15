@@ -30,13 +30,13 @@ use super::{get_chunker_ids, Context, Error, Orchestrator, StreamingClassificati
 use crate::{
     clients::{
         chunker::{tokenize_whole_doc_stream, ChunkerClient, DEFAULT_CHUNKER_ID},
-        detector::ContentAnalysisRequest,
+        detector::TextContentsRequest,
         GenerationClient, TextContentsDetectorClient,
     },
     models::{
-        ClassifiedGeneratedTextStreamResult, DetectorParams, GuardrailsTextGenerationParameters,
-        InputWarning, InputWarningReason, TextGenTokenClassificationResults,
-        TokenClassificationResult,
+        ClassifiedGeneratedTextStreamResult, Detection, DetectorParams,
+        GuardrailsTextGenerationParameters, InputWarning, InputWarningReason,
+        TextGenTokenClassificationResults,
     },
     orchestrator::{
         unary::{input_detection_task, tokenize},
@@ -46,7 +46,6 @@ use crate::{
 };
 
 pub type Chunk = ChunkerTokenizationStreamResult;
-pub type Detections = Vec<TokenClassificationResult>;
 
 impl Orchestrator {
     /// Handles streaming tasks.
@@ -383,7 +382,7 @@ async fn detection_task(
     detector_id: String,
     detector_params: DetectorParams,
     threshold: f64,
-    detector_tx: mpsc::Sender<(Chunk, Detections)>,
+    detector_tx: mpsc::Sender<(Chunk, Vec<Detection>)>,
     mut chunk_rx: broadcast::Receiver<Chunk>,
     error_tx: broadcast::Sender<Error>,
     headers: HeaderMap,
@@ -411,7 +410,7 @@ async fn detection_task(
                             debug!("empty chunk, skipping detector request.");
                             break;
                         } else {
-                            let request = ContentAnalysisRequest::new(contents.clone(), detector_params.clone());
+                            let request = TextContentsRequest::new(contents.clone(), detector_params.clone());
                             let headers = headers.clone();
                             debug!(%detector_id, ?request, "sending detector request");
                             let client = ctx
@@ -425,11 +424,8 @@ async fn detection_task(
                                         debug!(%detector_id, ?response, "received detector response");
                                         let detections = response
                                             .into_iter()
-                                            .flat_map(|r| {
-                                                r.into_iter().filter_map(|resp| {
-                                                    let result: TokenClassificationResult = resp.into();
-                                                    (result.score >= threshold).then_some(result)
-                                                })
+                                            .filter_map(|detection| {
+                                                (detection.score >= threshold).then_some(detection)
                                             })
                                             .collect::<Vec<_>>();
                                         let _ = detector_tx.send((chunk, detections)).await;

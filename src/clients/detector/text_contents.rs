@@ -25,7 +25,7 @@ use crate::{
     clients::{create_http_client, http::HttpClientExt, Client, Error, HttpClient},
     config::ServiceConfig,
     health::HealthCheckResult,
-    models::DetectorParams,
+    models::{Detection, DetectorParams},
 };
 
 const CONTENTS_DETECTOR_ENDPOINT: &str = "/api/v1/text/contents";
@@ -63,12 +63,16 @@ impl TextContentsDetectorClient {
     pub async fn text_contents(
         &self,
         model_id: &str,
-        request: ContentAnalysisRequest,
+        request: TextContentsRequest,
         headers: HeaderMap,
-    ) -> Result<Vec<Vec<ContentAnalysisResponse>>, Error> {
+    ) -> Result<Vec<Detection>, Error> {
         let url = self.endpoint(CONTENTS_DETECTOR_ENDPOINT);
         info!("sending text content detector request to {}", url);
-        self.post_to_detector(model_id, url, headers, request).await
+        let response: Result<Vec<Vec<Detection>>, Error> =
+            self.post_to_detector(model_id, url, headers, request).await;
+        // TODO: update text contents detectors to return a flattened response
+        // We should not need to do it here
+        response.map(|r| r.into_iter().flatten().collect::<Vec<_>>())
     }
 }
 
@@ -102,7 +106,7 @@ impl HttpClientExt for TextContentsDetectorClient {
 /// Results of this request will contain analysis / detection of each of the provided documents
 /// in the order they are present in the `contents` object.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ContentAnalysisRequest {
+pub struct TextContentsRequest {
     /// Field allowing users to provide list of documents for analysis
     pub contents: Vec<String>,
 
@@ -110,75 +114,11 @@ pub struct ContentAnalysisRequest {
     pub detector_params: DetectorParams,
 }
 
-impl ContentAnalysisRequest {
-    pub fn new(contents: Vec<String>, detector_params: DetectorParams) -> ContentAnalysisRequest {
-        ContentAnalysisRequest {
+impl TextContentsRequest {
+    pub fn new(contents: Vec<String>, detector_params: DetectorParams) -> TextContentsRequest {
+        TextContentsRequest {
             contents,
             detector_params,
         }
     }
-}
-
-/// Response of text content analysis endpoint
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ContentAnalysisResponse {
-    /// Start index of detection
-    pub start: usize,
-    /// End index of detection
-    pub end: usize,
-    /// Text corresponding to detection
-    pub text: String,
-    /// Relevant detection class
-    pub detection: String,
-    /// Detection type or aggregate detection label
-    pub detection_type: String,
-    /// Score of detection
-    pub score: f64,
-    /// Optional, any applicable evidence for detection
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub evidence: Option<Vec<EvidenceObj>>,
-}
-
-impl From<ContentAnalysisResponse> for crate::models::TokenClassificationResult {
-    fn from(value: ContentAnalysisResponse) -> Self {
-        Self {
-            start: value.start as u32,
-            end: value.end as u32,
-            word: value.text,
-            entity: value.detection,
-            entity_group: value.detection_type,
-            score: value.score,
-            token_count: None,
-        }
-    }
-}
-
-/// Evidence
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct Evidence {
-    /// Evidence name
-    pub name: String,
-    /// Optional, evidence value
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
-    /// Optional, score for evidence
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub score: Option<f64>,
-}
-
-/// Evidence in response
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct EvidenceObj {
-    /// Evidence name
-    pub name: String,
-    /// Optional, evidence value
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
-    /// Optional, score for evidence
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub score: Option<f64>,
-    /// Optional, evidence on evidence value
-    // Evidence nesting should likely not go beyond this
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub evidence: Option<Vec<Evidence>>,
 }

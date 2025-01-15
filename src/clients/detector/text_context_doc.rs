@@ -25,7 +25,7 @@ use crate::{
     clients::{create_http_client, http::HttpClientExt, Client, Error, HttpClient},
     config::ServiceConfig,
     health::HealthCheckResult,
-    models::{DetectionResult, DetectorParams},
+    models::{Detection, DetectorParams},
 };
 
 const CONTEXT_DOC_DETECTOR_ENDPOINT: &str = "/api/v1/text/context/doc";
@@ -65,7 +65,7 @@ impl TextContextDocDetectorClient {
         model_id: &str,
         request: ContextDocsDetectionRequest,
         headers: HeaderMap,
-    ) -> Result<Vec<DetectionResult>, Error> {
+    ) -> Result<Vec<Detection>, Error> {
         let url = self.endpoint(CONTEXT_DOC_DETECTOR_ENDPOINT);
         info!("sending text context doc detector request to {}", url);
         self.post_to_detector(model_id, url, headers, request).await

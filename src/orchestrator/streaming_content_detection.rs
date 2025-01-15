@@ -27,27 +27,29 @@
 ///////////////////////////////////////////////////////////////////////////////////
 mod aggregator;
 
-use aggregator::Aggregator;
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
+use aggregator::Aggregator;
 use futures::{future::try_join_all, stream::Peekable, Stream, StreamExt, TryStreamExt};
 use hyper::HeaderMap;
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 use tracing::{debug, error, info, instrument, warn};
 
-use super::{streaming::Detections, Context, Error, Orchestrator, StreamingContentDetectionTask};
-use crate::clients::{
-    chunker::{tokenize_whole_doc_stream, ChunkerClient, DEFAULT_CHUNKER_ID},
-    detector::ContentAnalysisRequest,
-    TextContentsDetectorClient,
+use super::{Context, Error, Orchestrator, StreamingContentDetectionTask};
+use crate::{
+    clients::{
+        chunker::{tokenize_whole_doc_stream, ChunkerClient, DEFAULT_CHUNKER_ID},
+        detector::TextContentsRequest,
+        TextContentsDetectorClient,
+    },
+    models::{
+        Detection, DetectorParams, StreamingContentDetectionRequest,
+        StreamingContentDetectionResponse,
+    },
+    orchestrator::{get_chunker_ids, streaming::Chunk},
+    pb::caikit::runtime::chunkers,
 };
-use crate::models::{
-    DetectorParams, StreamingContentDetectionRequest, StreamingContentDetectionResponse,
-    TokenClassificationResult,
-};
-use crate::orchestrator::{get_chunker_ids, streaming::Chunk};
-use crate::pb::caikit::runtime::chunkers;
 
 type ContentInputStream =
     Pin<Box<dyn Stream<Item = Result<StreamingContentDetectionRequest, Error>> + Send>>;
@@ -375,7 +377,7 @@ async fn detection_task(
     detector_id: String,
     detector_params: DetectorParams,
     threshold: f64,
-    detector_tx: mpsc::Sender<(Chunk, Detections)>,
+    detector_tx: mpsc::Sender<(Chunk, Vec<Detection>)>,
     mut chunk_rx: broadcast::Receiver<Chunk>,
     error_tx: broadcast::Sender<Error>,
     headers: HeaderMap,
@@ -403,7 +405,7 @@ async fn detection_task(
                             debug!("empty chunk, skipping detector request.");
                             break;
                         } else {
-                            let request = ContentAnalysisRequest::new(contents.clone(), detector_params.clone());
+                            let request = TextContentsRequest::new(contents.clone(), detector_params.clone());
                             let headers = headers.clone();
                             debug!(%detector_id, ?request, "sending detector request");
                             let client = ctx
@@ -417,12 +419,7 @@ async fn detection_task(
                                         debug!(%detector_id, ?response, "received detector response");
                                         let detections = response
                                             .into_iter()
-                                            .flat_map(|r| {
-                                                r.into_iter().filter_map(|resp| {
-                                                    let result: TokenClassificationResult = resp.into();
-                                                    (result.score >= threshold).then_some(result)
-                                                })
-                                            })
+                                            .filter(|detection| detection.score >= threshold)
                                             .collect::<Vec<_>>();
                                         let _ = detector_tx.send((chunk, detections)).await;
                                     },

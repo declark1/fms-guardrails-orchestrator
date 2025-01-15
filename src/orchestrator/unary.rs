@@ -33,20 +33,18 @@ use crate::{
     clients::{
         chunker::{tokenize_whole_doc, ChunkerClient, DEFAULT_CHUNKER_ID},
         detector::{
-            ChatDetectionRequest, ContentAnalysisRequest, ContentAnalysisResponse,
-            ContextDocsDetectionRequest, ContextType, GenerationDetectionRequest,
-            TextChatDetectorClient, TextContentsDetectorClient, TextContextDocDetectorClient,
-            TextGenerationDetectorClient,
+            ChatDetectionRequest, ContextDocsDetectionRequest, ContextType,
+            GenerationDetectionRequest, TextChatDetectorClient, TextContentsDetectorClient,
+            TextContentsRequest, TextContextDocDetectorClient, TextGenerationDetectorClient,
         },
         openai::Message,
         GenerationClient,
     },
     models::{
-        ChatDetectionResult, ClassifiedGeneratedTextResult, ContextDocsResult,
-        DetectionOnGenerationResult, DetectionResult, DetectorParams,
-        GenerationWithDetectionResult, GuardrailsTextGenerationParameters, InputWarning,
-        InputWarningReason, TextContentDetectionResult, TextGenTokenClassificationResults,
-        TokenClassificationResult,
+        ChatDetectionResult, ClassifiedGeneratedTextResult, ContextDocsResult, Detection,
+        DetectionOnGenerationResult, DetectorParams, GenerationWithDetectionResult,
+        GuardrailsTextGenerationParameters, InputWarning, InputWarningReason,
+        TextContentDetectionResult, TextGenTokenClassificationResults, TokenClassificationResult,
     },
     orchestrator::UNSUITABLE_INPUT_MESSAGE,
     pb::caikit::runtime::chunkers,
@@ -665,7 +663,7 @@ pub async fn detect(
         // skip detector call as contents is empty
         Vec::default()
     } else {
-        let request = ContentAnalysisRequest::new(contents, detector_params);
+        let request = TextContentsRequest::new(contents, detector_params);
         debug!(?request, "sending detector request");
         let client = ctx
             .clients
@@ -683,26 +681,36 @@ pub async fn detect(
             })?
     };
     debug!(?response, "received detector response");
-    if chunks.len() != response.len() {
-        return Err(Error::Other(format!(
-            "Detector {detector_id} did not return expected number of responses"
-        )));
-    }
+    // if chunks.len() != response.len() {
+    //     return Err(Error::Other(format!(
+    //         "Detector {detector_id} did not return expected number of responses"
+    //     )));
+    // }
     let results = chunks
         .into_iter()
         .zip(response)
-        .flat_map(|(chunk, response)| {
-            response
-                .into_iter()
-                .filter_map(|resp| {
-                    let mut result: TokenClassificationResult = resp.into();
-                    result.start += chunk.offset as u32;
-                    result.end += chunk.offset as u32;
-                    (result.score >= threshold).then_some(result)
-                })
-                .collect::<Vec<_>>()
+        .filter_map(|(chunk, detection)| {
+            let mut result: TokenClassificationResult = detection.into();
+            result.start += chunk.offset as u32;
+            result.end += chunk.offset as u32;
+            (result.score >= threshold).then_some(result)
         })
         .collect::<Vec<_>>();
+    // let results = chunks
+    //     .into_iter()
+    //     .zip(response)
+    //     .flat_map(|(chunk, response)| {
+    //         response
+    //             .into_iter()
+    //             .filter_map(|resp| {
+    //                 let mut result: TokenClassificationResult = resp.into();
+    //                 result.start += chunk.offset as u32;
+    //                 result.end += chunk.offset as u32;
+    //                 (result.score >= threshold).then_some(result)
+    //             })
+    //             .collect::<Vec<_>>()
+    //     })
+    //     .collect::<Vec<_>>();
     Ok::<Vec<TokenClassificationResult>, Error>(results)
 }
 
@@ -716,7 +724,7 @@ pub async fn detect_content(
     mut detector_params: DetectorParams,
     chunks: Vec<Chunk>,
     headers: HeaderMap,
-) -> Result<Vec<ContentAnalysisResponse>, Error> {
+) -> Result<Vec<Detection>, Error> {
     let detector_id = detector_id.clone();
     let threshold = detector_params.pop_threshold().unwrap_or(default_threshold);
     let contents: Vec<_> = chunks.iter().map(|chunk| chunk.text.clone()).collect();
@@ -724,7 +732,7 @@ pub async fn detect_content(
         // skip detector call as contents is empty
         Vec::default()
     } else {
-        let request = ContentAnalysisRequest::new(contents, detector_params);
+        let request = TextContentsRequest::new(contents, detector_params);
         debug!(?request, threshold, "sending detector request");
         let client = ctx
             .clients
@@ -747,21 +755,29 @@ pub async fn detect_content(
             "Detector {detector_id} did not return expected number of responses"
         )));
     }
-    let results = chunks
+    // let results = chunks
+    //     .into_iter()
+    //     .zip(response)
+    //     .flat_map(|(chunk, response)| {
+    //         response
+    //             .into_iter()
+    //             .filter_map(|mut resp| {
+    //                 resp.start += chunk.offset;
+    //                 resp.end += chunk.offset;
+    //                 (resp.score >= threshold).then_some(resp)
+    //             })
+    //             .collect::<Vec<_>>()
+    //     })
+    //     .collect::<Vec<_>>();
+    Ok(chunks
         .into_iter()
         .zip(response)
-        .flat_map(|(chunk, response)| {
-            response
-                .into_iter()
-                .filter_map(|mut resp| {
-                    resp.start += chunk.offset;
-                    resp.end += chunk.offset;
-                    (resp.score >= threshold).then_some(resp)
-                })
-                .collect::<Vec<_>>()
+        .filter_map(|(chunk, detection)| {
+            detection.start.map(|v| v + chunk.offset);
+            detection.end.map(|v| v + chunk.offset);
+            (detection.score >= threshold).then_some(detection)
         })
-        .collect::<Vec<_>>();
-    Ok::<Vec<ContentAnalysisResponse>, Error>(results)
+        .collect())
 }
 
 /// Calls a detector that implements the /api/v1/text/generation endpoint
@@ -773,7 +789,7 @@ pub async fn detect_for_generation(
     prompt: String,
     generated_text: String,
     headers: HeaderMap,
-) -> Result<Vec<DetectionResult>, Error> {
+) -> Result<Vec<Detection>, Error> {
     let detector_id = detector_id.clone();
     let threshold = detector_params.pop_threshold().unwrap_or(
         detector_params.pop_threshold().unwrap_or(
@@ -810,7 +826,7 @@ pub async fn detect_for_generation(
             error,
         })?;
     debug!(?response, "received generation detector response");
-    Ok::<Vec<DetectionResult>, Error>(response)
+    Ok(response)
 }
 
 /// Calls a detector that implements the /api/v1/text/chat endpoint
@@ -820,7 +836,7 @@ pub async fn detect_for_chat(
     mut detector_params: DetectorParams,
     messages: Vec<Message>,
     headers: HeaderMap,
-) -> Result<Vec<DetectionResult>, Error> {
+) -> Result<Vec<Detection>, Error> {
     let detector_id = detector_id.clone();
     let threshold = detector_params.pop_threshold().unwrap_or(
         detector_params.pop_threshold().unwrap_or(
@@ -851,7 +867,7 @@ pub async fn detect_for_chat(
             error,
         })?;
     debug!(%detector_id, ?response, "received chat detector response");
-    Ok::<Vec<DetectionResult>, Error>(response)
+    Ok(response)
 }
 
 /// Calls a detector that implements the /api/v1/text/doc endpoint
@@ -864,7 +880,7 @@ pub async fn detect_for_context(
     context_type: ContextType,
     context: Vec<String>,
     headers: HeaderMap,
-) -> Result<Vec<DetectionResult>, Error> {
+) -> Result<Vec<Detection>, Error> {
     let detector_id = detector_id.clone();
     let threshold = detector_params.pop_threshold().unwrap_or(
         detector_params.pop_threshold().unwrap_or(
@@ -906,7 +922,7 @@ pub async fn detect_for_context(
             error,
         })?;
     debug!(%detector_id, ?response, "received context detector response");
-    Ok::<Vec<DetectionResult>, Error>(response)
+    Ok(response)
 }
 
 /// Sends request to chunker service.
@@ -1023,12 +1039,10 @@ mod tests {
     use super::*;
     use crate::{
         clients::{
-            self,
-            detector::{ContentAnalysisResponse, GenerationDetectionRequest},
-            ClientMap, GenerationClient, TgisClient,
+            self, detector::GenerationDetectionRequest, ClientMap, GenerationClient, TgisClient,
         },
         config::{DetectorConfig, OrchestratorConfig},
-        models::{DetectionResult, EvidenceObj, FinishReason, THRESHOLD_PARAM},
+        models::{EvidenceObj, FinishReason, THRESHOLD_PARAM},
         pb::fmaas::{
             BatchedGenerationRequest, BatchedGenerationResponse, GenerationRequest,
             GenerationResponse, StopReason,
@@ -1137,7 +1151,7 @@ mod tests {
 
         faux::when!(detector_client.text_contents(
             detector_id,
-            ContentAnalysisRequest::new(
+            TextContentsRequest::new(
                 vec![first_sentence.clone(), second_sentence.clone()],
                 DetectorParams::new()
             ),
@@ -1145,24 +1159,24 @@ mod tests {
         ))
         .once()
         .then_return(Ok(vec![
-            vec![ContentAnalysisResponse {
-                start: 0,
-                end: 22,
-                text: first_sentence.clone(),
+            Detection {
+                start: Some(0),
+                end: Some(22),
+                text: Some(first_sentence.clone()),
                 detection: "has_HAP".to_string(),
                 detection_type: "hap".to_string(),
                 score: 0.1,
                 evidence: Some(vec![]),
-            }],
-            vec![ContentAnalysisResponse {
-                start: 0,
-                end: 14,
-                text: second_sentence.clone(),
+            },
+            Detection {
+                start: Some(0),
+                end: Some(14),
+                text: Some(second_sentence.clone()),
                 detection: "has_HAP".to_string(),
                 detection_type: "hap".to_string(),
                 score: 0.9,
                 evidence: Some(vec![]),
-            }],
+            },
         ]));
 
         let mut clients = ClientMap::new();
@@ -1212,7 +1226,7 @@ mod tests {
 
         faux::when!(detector_client.text_contents(
             detector_id,
-            ContentAnalysisRequest::new(vec![sentence.clone()], DetectorParams::new()),
+            TextContentsRequest::new(vec![sentence.clone()], DetectorParams::new()),
             HeaderMap::new(),
         ))
         .once()
@@ -1258,11 +1272,11 @@ mod tests {
 
         faux::when!(detector_client.text_contents(
             detector_id,
-            ContentAnalysisRequest::new(vec![first_sentence.clone()], DetectorParams::new()),
+            TextContentsRequest::new(vec![first_sentence.clone()], DetectorParams::new()),
             HeaderMap::new(),
         ))
         .once()
-        .then_return(Ok(vec![vec![]]));
+        .then_return(Ok(vec![]));
 
         let mut clients = ClientMap::new();
         clients.insert("generation".into(), generation_client);
@@ -1270,19 +1284,17 @@ mod tests {
         let ctx = Arc::new(Context::new(OrchestratorConfig::default(), clients));
 
         let expected_response_whitespace = vec![];
-        assert_eq!(
-            detect(
-                ctx,
-                detector_id.to_string(),
-                threshold,
-                detector_params,
-                chunks,
-                HeaderMap::new(),
-            )
-            .await
-            .unwrap(),
-            expected_response_whitespace
-        );
+        let response = detect(
+            ctx,
+            detector_id.to_string(),
+            threshold,
+            detector_params,
+            chunks,
+            HeaderMap::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response, expected_response_whitespace);
     }
 
     #[tokio::test]
@@ -1297,19 +1309,17 @@ mod tests {
         let mut detector_params = DetectorParams::new();
         detector_params.insert(THRESHOLD_PARAM.into(), threshold.into());
 
-        let expected_response: Vec<DetectionResult> = vec![DetectionResult {
+        let expected_response: Vec<Detection> = vec![Detection {
             detection_type: "relevance".to_string(),
             detection: "is_relevant".to_string(),
             score: 0.9,
-            evidence: Some(
-                [EvidenceObj {
-                    name: "relevant chunk".into(),
-                    value: Some("What is capital of Brazil".into()),
-                    score: Some(0.99),
-                    evidence: None,
-                }]
-                .to_vec(),
-            ),
+            evidence: Some(vec![EvidenceObj {
+                name: "relevant chunk".into(),
+                value: Some("What is capital of Brazil".into()),
+                score: Some(0.99),
+                evidence: None,
+            }]),
+            ..Default::default()
         }];
 
         faux::when!(detector_client.text_generation(
@@ -1322,19 +1332,17 @@ mod tests {
             HeaderMap::new(),
         ))
         .once()
-        .then_return(Ok(vec![DetectionResult {
+        .then_return(Ok(vec![Detection {
             detection_type: "relevance".to_string(),
             detection: "is_relevant".to_string(),
             score: 0.9,
-            evidence: Some(
-                [EvidenceObj {
-                    name: "relevant chunk".into(),
-                    value: Some("What is capital of Brazil".into()),
-                    score: Some(0.99),
-                    evidence: None,
-                }]
-                .to_vec(),
-            ),
+            evidence: Some(vec![EvidenceObj {
+                name: "relevant chunk".into(),
+                value: Some("What is capital of Brazil".into()),
+                score: Some(0.99),
+                evidence: None,
+            }]),
+            ..Default::default()
         }]));
 
         let mut clients = ClientMap::new();
@@ -1378,7 +1386,7 @@ mod tests {
         let mut detector_params = DetectorParams::new();
         detector_params.insert(THRESHOLD_PARAM.into(), threshold.into());
 
-        let expected_response: Vec<DetectionResult> = vec![];
+        let expected_response: Vec<Detection> = vec![];
 
         faux::when!(detector_client.text_generation(
             detector_id,
@@ -1390,11 +1398,12 @@ mod tests {
             HeaderMap::new(),
         ))
         .once()
-        .then_return(Ok(vec![DetectionResult {
+        .then_return(Ok(vec![Detection {
             detection_type: "relevance".to_string(),
             detection: "is_relevant".to_string(),
             score: 0.1,
             evidence: None,
+            ..Default::default()
         }]));
 
         let mut clients = ClientMap::new();

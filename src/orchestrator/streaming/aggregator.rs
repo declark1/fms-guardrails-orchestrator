@@ -8,11 +8,8 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::instrument;
 
 use crate::{
-    models::ClassifiedGeneratedTextStreamResult,
-    orchestrator::{
-        streaming::{Chunk, Detections},
-        Error,
-    },
+    models::{ClassifiedGeneratedTextStreamResult, Detection},
+    orchestrator::{streaming::Chunk, Error},
 };
 
 pub type DetectorId = String;
@@ -44,7 +41,7 @@ impl Aggregator {
     pub fn run(
         &self,
         mut generation_rx: broadcast::Receiver<ClassifiedGeneratedTextStreamResult>,
-        detection_streams: Vec<(DetectorId, mpsc::Receiver<(Chunk, Detections)>)>,
+        detection_streams: Vec<(DetectorId, mpsc::Receiver<(Chunk, Vec<Detection>)>)>,
     ) -> mpsc::Receiver<Result<ClassifiedGeneratedTextStreamResult, Error>> {
         // Create result channel
         let (result_tx, result_rx) = mpsc::channel(32);
@@ -84,7 +81,7 @@ impl Aggregator {
 #[derive(Debug)]
 struct ResultActorMessage {
     pub chunk: Chunk,
-    pub detections: Detections,
+    pub detections: Vec<Detection>,
 }
 
 /// Builds results and sends them to result channel.
@@ -139,7 +136,8 @@ impl ResultActor {
             // Populate fields from last response or default
             ..generations.last().cloned().unwrap_or_default()
         };
-        result.token_classification_results.output = Some(detections);
+        result.token_classification_results.output =
+            Some(detections.into_iter().map(|v| v.into()).collect());
         if input_start_index == 0 {
             // Get input_token_count and seed from first generation message
             let first = generations
@@ -177,7 +175,7 @@ impl ResultActorHandle {
         Self { tx }
     }
 
-    pub async fn send(&self, chunk: Chunk, detections: Detections) {
+    pub async fn send(&self, chunk: Chunk, detections: Vec<Detection>) {
         let msg = ResultActorMessage { chunk, detections };
         let _ = self.tx.send(msg).await;
     }
@@ -186,7 +184,7 @@ impl ResultActorHandle {
 #[derive(Debug)]
 struct AggregationActorMessage {
     pub chunk: Chunk,
-    pub detections: Detections,
+    pub detections: Vec<Detection>,
 }
 
 /// Aggregates detections and sends them to [`ResultActor`].
@@ -236,9 +234,9 @@ impl AggregationActor {
             // Take first span and send to result actor
             if let Some((_key, value)) = self.tracker.pop_first() {
                 let chunk = value.chunk;
-                let mut detections: Detections = value.detections.into_iter().flatten().collect();
+                let mut detections = value.detections.into_iter().flatten().collect::<Vec<_>>();
                 // Provide sorted detections within each chunk
-                detections.sort_by_key(|r| r.start);
+                detections.sort_by_key(|v| v.start);
                 let _ = self.result_actor.send(chunk, detections).await;
             }
         }
@@ -258,7 +256,7 @@ impl AggregationActorHandle {
         Self { tx }
     }
 
-    pub async fn send(&self, chunk: Chunk, detections: Detections) {
+    pub async fn send(&self, chunk: Chunk, detections: Vec<Detection>) {
         let msg = AggregationActorMessage { chunk, detections };
         let _ = self.tx.send(msg).await;
     }
@@ -372,11 +370,11 @@ impl GenerationActorHandle {
 #[derive(Debug, Clone)]
 pub struct TrackerEntry {
     pub chunk: Chunk,
-    pub detections: Vec<Detections>,
+    pub detections: Vec<Vec<Detection>>,
 }
 
 impl TrackerEntry {
-    pub fn new(chunk: Chunk, detections: Detections) -> Self {
+    pub fn new(chunk: Chunk, detections: Vec<Detection>) -> Self {
         Self {
             chunk,
             detections: vec![detections],
@@ -448,25 +446,22 @@ impl Tracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        models::TokenClassificationResult,
-        pb::caikit_data_model::nlp::{ChunkerTokenizationStreamResult, Token},
-    };
+    use crate::pb::caikit_data_model::nlp::{ChunkerTokenizationStreamResult, Token};
 
     fn get_detection_obj(
         span: Span,
         text: &str,
         detection: &str,
         detection_type: &str,
-    ) -> TokenClassificationResult {
-        TokenClassificationResult {
-            start: span.0 as u32,
-            end: span.1 as u32,
-            word: text.to_string(),
-            entity: detection.to_string(),
-            entity_group: detection_type.to_string(),
+    ) -> Detection {
+        Detection {
+            start: Some(span.0 as usize),
+            end: Some(span.1 as usize),
+            text: Some(text.to_string()),
+            detection: detection.to_string(),
+            detection_type: detection_type.to_string(),
             score: 0.99,
-            token_count: None,
+            ..Default::default()
         }
     }
 

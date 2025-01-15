@@ -27,7 +27,7 @@ use crate::{
     },
     config::ServiceConfig,
     health::HealthCheckResult,
-    models::{DetectionResult, DetectorParams},
+    models::{Detection, DetectorParams},
 };
 
 const CHAT_DETECTOR_ENDPOINT: &str = "/api/v1/text/chat";
@@ -67,7 +67,7 @@ impl TextChatDetectorClient {
         model_id: &str,
         request: ChatDetectionRequest,
         headers: HeaderMap,
-    ) -> Result<Vec<DetectionResult>, Error> {
+    ) -> Result<Vec<Detection>, Error> {
         let url = self.endpoint(CHAT_DETECTOR_ENDPOINT);
         info!("sending text chat detector request to {}", url);
         self.post_to_detector(model_id, url, headers, request).await

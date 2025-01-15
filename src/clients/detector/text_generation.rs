@@ -25,7 +25,7 @@ use crate::{
     clients::{create_http_client, http::HttpClientExt, Client, Error, HttpClient},
     config::ServiceConfig,
     health::HealthCheckResult,
-    models::{DetectionResult, DetectorParams},
+    models::{Detection, DetectorParams},
 };
 
 const GENERATION_DETECTOR_ENDPOINT: &str = "/api/v1/text/generation";
@@ -65,7 +65,7 @@ impl TextGenerationDetectorClient {
         model_id: &str,
         request: GenerationDetectionRequest,
         headers: HeaderMap,
-    ) -> Result<Vec<DetectionResult>, Error> {
+    ) -> Result<Vec<Detection>, Error> {
         let url = self.endpoint(GENERATION_DETECTOR_ENDPOINT);
         info!("sending text generation detector request to {}", url);
         self.post_to_detector(model_id, url, headers, request).await

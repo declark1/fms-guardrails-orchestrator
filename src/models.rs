@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     clients::{
         self,
-        detector::{ContentAnalysisResponse, ContextType},
+        detector::ContextType,
         openai::{Content, ContentType},
     },
     health::HealthCheckCache,
@@ -373,7 +373,7 @@ impl TextContentDetectionHttpRequest {
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextContentDetectionResult {
     /// Detection results
-    pub detections: Vec<ContentAnalysisResponse>,
+    pub detections: Vec<Detection>,
 }
 /// Streaming classification result on text produced by a text generation model, containing
 /// information from the original text generation output as well as the result of
@@ -876,30 +876,77 @@ pub struct GenerationWithDetectionResult {
     pub generated_text: String,
 
     /// Detection results
-    pub detections: Vec<DetectionResult>,
+    pub detections: Vec<Detection>,
 
     /// Input length
     pub input_token_count: u32,
 }
 
-/// Detection format received from detectors
-/// This struct does NOT apply to classification endpoints:
-/// /api/v1/task/classification-with-text-generation
-/// /api/v1/task/server-streaming-classification-with-text-generation
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DetectionResult {
+/// Detection response received from detectors.
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Detection {
+    /// Start index of detection
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<usize>,
+    /// End index of detection
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<usize>,
+    /// Text corresponding to detection
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
     // The type of detection
     pub detection_type: String,
-
     // The detection class
     pub detection: String,
-
     // The confidence level in the detection class
     pub score: f64,
-
     // Optional evidence block
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<Vec<EvidenceObj>>,
+}
+
+/// Evidence
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Evidence {
+    /// Evidence name
+    pub name: String,
+    /// Optional, evidence value
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// Optional, score for evidence
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+}
+
+/// Evidence in response
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct EvidenceObj {
+    /// Evidence name
+    pub name: String,
+    /// Optional, evidence value
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// Optional, score for evidence
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+    /// Optional, evidence on evidence value
+    // Evidence nesting should likely not go beyond this
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<Vec<Evidence>>,
+}
+
+impl From<Detection> for TokenClassificationResult {
+    fn from(value: Detection) -> Self {
+        Self {
+            start: value.start.map(|v| v as u32).unwrap_or_default(),
+            end: value.end.map(|v| v as u32).unwrap_or_default(),
+            word: value.text.unwrap_or_default(),
+            entity: value.detection,
+            entity_group: value.detection_type,
+            score: value.score,
+            token_count: None,
+        }
+    }
 }
 
 /// The request format expected in the /api/v2/text/context endpoint.
@@ -942,7 +989,7 @@ impl ContextDocsHttpRequest {
 /// The response format of the /api/v1/text/task/generation-detection endpoint
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContextDocsResult {
-    pub detections: Vec<DetectionResult>,
+    pub detections: Vec<Detection>,
 }
 
 /// The request format expected in the /api/v2/text/detect/generated endpoint.
@@ -1015,7 +1062,7 @@ impl ChatDetectionHttpRequest {
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatDetectionResult {
     /// Detection results
-    pub detections: Vec<DetectionResult>,
+    pub detections: Vec<Detection>,
 }
 
 /// The request format expected in the /api/v2/text/detect/generated endpoint.
@@ -1056,7 +1103,7 @@ impl DetectionOnGeneratedHttpRequest {
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DetectionOnGenerationResult {
     /// Detection results
-    pub detections: Vec<DetectionResult>,
+    pub detections: Vec<Detection>,
 }
 
 /// Validates detector params.
@@ -1074,35 +1121,6 @@ fn validate_detector_params(
         }
     }
     Ok(())
-}
-
-/// Individual evidence object for detection response
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Evidence {
-    // Name for the evidence
-    pub name: String,
-    // Optional, value for the evidence
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
-    // Optional, computed score for the value
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub score: Option<f64>,
-}
-
-/// High level evidence object for detection response
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EvidenceObj {
-    // Name for the evidence
-    pub name: String,
-    // Optional, value for the evidence
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
-    // Optional, omputed score for the value
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub score: Option<f64>,
-    // Optional, additional evidence
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub evidence: Option<Vec<Evidence>>,
 }
 
 /// Stream content detection stream request
@@ -1128,7 +1146,7 @@ impl StreamingContentDetectionRequest {
 /// Stream content detection response
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StreamingContentDetectionResponse {
-    pub detections: Vec<ContentAnalysisResponse>,
+    pub detections: Vec<Detection>,
     pub processed_index: u32,
     pub start_index: u32,
 }

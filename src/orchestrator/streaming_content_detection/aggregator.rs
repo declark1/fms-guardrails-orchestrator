@@ -33,12 +33,11 @@ use tokio::sync::mpsc;
 use tracing::instrument;
 
 use crate::{
-    clients::detector::ContentAnalysisResponse,
-    models::StreamingContentDetectionResponse,
+    models::{Detection, StreamingContentDetectionResponse},
     orchestrator::{
         streaming::{
             aggregator::{AggregationStrategy, DetectorId, Tracker, TrackerEntry},
-            Chunk, Detections,
+            Chunk,
         },
         Error,
     },
@@ -64,7 +63,7 @@ impl Aggregator {
     #[instrument(skip_all)]
     pub fn run(
         &self,
-        detection_streams: Vec<(DetectorId, mpsc::Receiver<(Chunk, Detections)>)>,
+        detection_streams: Vec<(DetectorId, mpsc::Receiver<(Chunk, Vec<Detection>)>)>,
     ) -> mpsc::Receiver<Result<StreamingContentDetectionResponse, Error>> {
         // Create result channel
         let (result_tx, result_rx) = mpsc::channel(32);
@@ -92,7 +91,7 @@ impl Aggregator {
 #[derive(Debug)]
 struct AggregationActorMessage {
     pub chunk: Chunk,
-    pub detections: Detections,
+    pub detections: Vec<Detection>,
 }
 
 /// Aggregates detections, builds results, and sends them to result channel.
@@ -142,26 +141,15 @@ impl AggregationActor {
             // Take first span and send result
             if let Some((_key, value)) = self.tracker.pop_first() {
                 let chunk = value.chunk;
-                let mut detections: Detections = value.detections.into_iter().flatten().collect();
+                let mut detections = value.detections.into_iter().flatten().collect::<Vec<_>>();
                 // Provide sorted detections within each chunk
-                detections.sort_by_key(|r| r.start);
+                detections.sort_by_key(|v| v.start);
 
                 // Build response message
                 let response = StreamingContentDetectionResponse {
                     start_index: chunk.start_index as u32,
                     processed_index: chunk.processed_index as u32,
-                    detections: detections
-                        .into_iter()
-                        .map(|r| ContentAnalysisResponse {
-                            start: r.start as usize,
-                            end: r.end as usize,
-                            text: r.word,
-                            detection: r.entity,
-                            detection_type: r.entity_group,
-                            score: r.score,
-                            evidence: None,
-                        })
-                        .collect(),
+                    detections,
                 };
                 // Send to result channel
                 let _ = self.result_tx.send(Ok(response)).await;
@@ -186,7 +174,7 @@ impl AggregationActorHandle {
         Self { tx }
     }
 
-    pub async fn send(&self, chunk: Chunk, detections: Detections) {
+    pub async fn send(&self, chunk: Chunk, detections: Vec<Detection>) {
         let msg = AggregationActorMessage { chunk, detections };
         let _ = self.tx.send(msg).await;
     }
@@ -196,7 +184,6 @@ impl AggregationActorHandle {
 mod tests {
     use super::*;
     use crate::{
-        models::TokenClassificationResult,
         orchestrator::streaming::aggregator::Span,
         pb::caikit_data_model::nlp::{ChunkerTokenizationStreamResult, Token},
     };
@@ -206,15 +193,15 @@ mod tests {
         text: &str,
         detection: &str,
         detection_type: &str,
-    ) -> TokenClassificationResult {
-        TokenClassificationResult {
-            start: span.0 as u32,
-            end: span.1 as u32,
-            word: text.to_string(),
-            entity: detection.to_string(),
-            entity_group: detection_type.to_string(),
+    ) -> Detection {
+        Detection {
+            start: Some(span.0 as usize),
+            end: Some(span.1 as usize),
+            text: Some(text.to_string()),
+            detection: detection.to_string(),
+            detection_type: detection_type.to_string(),
             score: 0.99,
-            token_count: None,
+            ..Default::default()
         }
     }
 
