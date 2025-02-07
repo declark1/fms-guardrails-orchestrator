@@ -31,11 +31,11 @@ use super::{
 };
 use crate::{
     clients::{
-        chunker::MODEL_ID_HEADER_NAME,
         detector::{ChatDetectionRequest, ContentAnalysisRequest},
         openai::{
-            ChatCompletion, ChatCompletionChoice, ChatCompletionsRequest, ChatCompletionsResponse,
-            ChatDetections, Content, DetectionResult, OpenAiClient, OrchestratorWarning, Role,
+            ChatCompletion, ChatCompletionChoice, ChatCompletionChunk, ChatCompletionsRequest,
+            ChatCompletionsResponse, ChatDetections, Content, DetectionResult, OpenAiClient,
+            OrchestratorWarning, Role,
         },
     },
     config::DetectorType,
@@ -145,6 +145,7 @@ async fn handle_unary(
     let input_detections = match detectors.input {
         Some(detectors) if !detectors.is_empty() => {
             let chunker_ids = get_chunker_ids(&ctx, &detectors)?;
+            // let messages = task.request.messages(); // TODO
             let messages = Vec::<ChatMessageInternal>::from(&task.request);
             let messages = content::filter_chat_messages(&messages)?;
             let chunks = chunk(ctx.clone(), chunker_ids, messages).await?;
@@ -185,6 +186,7 @@ async fn handle_unary(
                 let output_detections = match detectors.output {
                     Some(detectors) if !detectors.is_empty() => {
                         let chunker_ids = get_chunker_ids(&ctx, &detectors)?;
+                        // let messages = chat_completion.messages(); // TODO
                         let messages = Vec::<ChatMessageInternal>::from(&chat_completion);
                         let chunks = chunk(ctx.clone(), chunker_ids, messages).await?;
                         let detections =
@@ -223,7 +225,7 @@ async fn handle_streaming(
     _task: ChatCompletionsDetectionTask,
 ) -> Result<ChatCompletionsResponse, Error> {
     Err(Error::NotImplemented(
-        "chat completions streaming is not yet implemented".into(),
+        "chat completions streaming is not currently supported".into(),
     ))
 }
 
@@ -232,7 +234,7 @@ async fn handle_streaming(
 async fn chunk(
     ctx: Arc<Context>,
     chunker_ids: Vec<String>,
-    messages: Vec<ChatMessageInternal>,
+    messages: Vec<ChatMessageInternal>, // TODO: messages: impl Iterator<Item = ChatMessage<'_>>,
 ) -> Result<HashMap<String, Vec<(usize, Vec<Chunk>)>>, Error> {
     let tasks = chunker_ids
         .iter()
@@ -344,7 +346,6 @@ async fn detect(
 fn sort_detections(mut detections: Vec<DetectionResult>) -> Vec<DetectionResult> {
     // Sort input detections by message_index
     detections.sort_by_key(|value| value.index);
-
     detections
         .into_iter()
         .map(|mut detection| {
@@ -377,4 +378,52 @@ async fn chat_completions(
         id: model_id,
         error,
     })
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChatMessage<'a> {
+    pub index: usize,
+    pub role: Option<&'a Role>,
+    pub text: Option<&'a str>,
+}
+
+pub trait ChatMessageIterator {
+    fn messages(&self) -> impl Iterator<Item = ChatMessage>;
+}
+
+impl ChatMessageIterator for ChatCompletionsRequest {
+    fn messages(&self) -> impl Iterator<Item = ChatMessage> {
+        self.messages.iter().enumerate().map(|(index, message)| {
+            let text = if let Some(Content::Text(text)) = &message.content {
+                Some(text.as_str())
+            } else {
+                None
+            };
+            ChatMessage {
+                index,
+                role: Some(&message.role),
+                text,
+            }
+        })
+    }
+}
+
+impl ChatMessageIterator for ChatCompletion {
+    fn messages(&self) -> impl Iterator<Item = ChatMessage> {
+        self.choices.iter().map(|choice| ChatMessage {
+            index: choice.index,
+            role: Some(&choice.message.role),
+            text: choice.message.content.as_deref(),
+        })
+    }
+}
+
+impl ChatMessageIterator for ChatCompletionChunk {
+    fn messages(&self) -> impl Iterator<Item = ChatMessage> {
+        self.choices.iter().map(|choice| ChatMessage {
+            index: choice.index as usize,
+            role: choice.delta.role.as_ref(),
+            text: choice.delta.content.as_deref(),
+        })
+    }
 }
