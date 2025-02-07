@@ -73,9 +73,8 @@ impl OpenAiClient {
         headers: HeaderMap,
     ) -> Result<ChatCompletionsResponse, Error> {
         let url = self.inner().endpoint(CHAT_COMPLETIONS_ENDPOINT);
-        let stream = request.stream.unwrap_or_default();
-        info!("sending Open AI chat completion request to {}", url);
-        if stream {
+        info!("sending chat completions request to {}", url);
+        if request.stream {
             let (tx, rx) = mpsc::channel(32);
             let mut event_stream = self
                 .inner()
@@ -232,8 +231,8 @@ pub struct ChatCompletionsRequest {
     /// If set, partial message deltas will be sent, like in ChatGPT.
     /// Tokens will be sent as data-only server-sent events as they become available,
     /// with the stream terminated by a data: [DONE] message.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stream: Option<bool>,
+    #[serde(default)]
+    pub stream: bool,
     /// Options for streaming response. Only set this when you set stream: true.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_options: Option<StreamOptions>,

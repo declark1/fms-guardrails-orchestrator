@@ -41,6 +41,8 @@ pub enum Error {
     Cancelled,
     #[error("json deserialization error: {0}")]
     JsonError(String),
+    #[error("not implemented error: {0}")]
+    NotImplemented(String),
 }
 
 impl From<tokio::task::JoinError> for Error {
