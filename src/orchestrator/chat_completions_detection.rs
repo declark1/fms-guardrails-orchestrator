@@ -31,6 +31,7 @@ use super::{
 };
 use crate::{
     clients::{
+        chunker::MODEL_ID_HEADER_NAME,
         detector::{ChatDetectionRequest, ContentAnalysisRequest},
         openai::{
             ChatCompletion, ChatCompletionChoice, ChatCompletionsRequest, ChatCompletionsResponse,
@@ -176,21 +177,7 @@ async fn handle_unary(
         .into())
     } else {
         // Handle chat generation
-        let client = ctx
-            .clients
-            .get_as::<OpenAiClient>("chat_generation")
-            .expect("chat_generation client not found");
-        let mut request = task.request;
-        let model_id = request.model.clone();
-        // Remove detectors as chat completion server would reject extra parameter
-        request.detectors = None;
-        let chat_completions = client
-            .chat_completions(request, headers.clone())
-            .await
-            .map_err(|error| Error::ChatGenerateRequestFailed {
-                id: model_id.clone(),
-                error,
-            })?;
+        let chat_completions = chat_completions(&ctx, headers.clone(), task.request).await?;
         use ChatCompletionsResponse::*;
         match chat_completions {
             Unary(mut chat_completion) => {
@@ -370,4 +357,24 @@ fn sort_detections(mut detections: Vec<DetectionResult>) -> Vec<DetectionResult>
             detection
         })
         .collect::<Vec<_>>()
+}
+
+#[instrument(skip_all)]
+async fn chat_completions(
+    ctx: &Arc<Context>,
+    headers: HeaderMap,
+    mut request: ChatCompletionsRequest,
+) -> Result<ChatCompletionsResponse, Error> {
+    let client = ctx
+        .clients
+        .get_as::<OpenAiClient>("chat_generation")
+        .expect("chat_generation client not found");
+    let model_id = request.model.clone();
+    // Remove detectors as chat completion server would reject extra parameter
+    request.detectors = None;
+    let result = client.chat_completions(request, headers).await;
+    result.map_err(|error| Error::ChatGenerateRequestFailed {
+        id: model_id,
+        error,
+    })
 }
