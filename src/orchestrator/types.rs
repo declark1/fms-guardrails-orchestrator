@@ -1,4 +1,4 @@
-use std::{collections::HashMap, pin::Pin};
+use std::pin::Pin;
 
 use futures::Stream;
 
@@ -15,12 +15,9 @@ use super::Error;
 
 pub type ChunkerId = String;
 pub type DetectorId = String;
-pub type Indexed<T> = (usize, T);
 pub type Chunks = Vec<Chunk>;
-pub type Chunked<T> = (T, Chunks);
-pub type ChunkMap<T> = HashMap<ChunkerId, Vec<Chunked<T>>>;
 pub type Detections = Vec<Detection>;
 
 pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
-pub type ChunkStream<T> = BoxStream<Result<Chunked<T>, Error>>;
-pub type DetectionStream<T> = BoxStream<Result<(Chunked<T>, Detections), Error>>;
+pub type ChunkStream = BoxStream<Result<Chunk, Error>>;
+pub type DetectionStream = BoxStream<Result<(Chunk, Detections), Error>>;

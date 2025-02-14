@@ -1,7 +1,4 @@
-use std::{
-    collections::{hash_map, HashMap},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use either::Either;
 use futures::{stream, StreamExt, TryStreamExt};
@@ -26,58 +23,37 @@ pub mod utils;
 pub async fn chunks<T>(
     ctx: Arc<Context>,
     chunkers: Vec<ChunkerId>,
-    inputs: Either<T, impl IntoIterator<Item = (usize, T)>>,
-) -> Result<ChunkMap<T>, Error>
+    inputs: Either<T, Vec<(usize, T)>>,
+) -> Result<HashMap<ChunkerId, Chunks>, Error>
 where
     T: ToString + Clone + Send + 'static,
 {
-    // Collect to (input, offset, text) tuples
-    let inputs = match inputs {
-        Either::Left(input) => {
-            let text = input.to_string();
-            vec![(input, 0, text)]
-        }
-        Either::Right(inputs) => inputs
-            .into_iter()
-            .map(|(offset, input)| {
-                let text = input.to_string();
-                (input, offset, text)
-            })
-            .collect::<Vec<_>>(),
-    };
-    let capacity = chunkers.len() * inputs.len();
+    let inputs = chunkers
+        .iter()
+        .flat_map(|chunker_id| match inputs {
+            Either::Left(ref input) => {
+                vec![(chunker_id.clone(), 0, input.to_string())]
+            }
+            Either::Right(ref inputs) => inputs
+                .iter()
+                .map(|(offset, input)| (chunker_id.clone(), *offset, input.to_string()))
+                .collect::<Vec<_>>(),
+        })
+        .collect::<Vec<_>>();
 
-    let mut chunk_inputs = Vec::with_capacity(capacity);
-    for chunker_id in &chunkers {
-        for (input, offset, text) in &inputs {
-            chunk_inputs.push((chunker_id.clone(), input.clone(), *offset, text.clone()));
-        }
-    }
-    let results = stream::iter(chunk_inputs)
-        .map(|(chunker_id, input, offset, text)| {
+    let results = stream::iter(inputs)
+        .map(|(chunker_id, offset, text)| {
             let ctx = ctx.clone();
             async move {
                 let chunks = chunk(ctx, chunker_id.clone(), offset, text).await?;
-                Ok::<_, Error>((chunker_id, input, chunks))
+                Ok::<_, Error>((chunker_id, chunks))
             }
         })
-        .buffered(8)
-        .try_collect::<Vec<_>>()
+        .buffer_unordered(8)
+        .try_collect::<HashMap<_, _>>()
         .await?;
 
-    // Build chunk map
-    let mut chunk_map: ChunkMap<T> = HashMap::with_capacity(capacity);
-    for (chunker_id, input, chunks) in results {
-        match chunk_map.entry(chunker_id) {
-            hash_map::Entry::Occupied(mut entry) => {
-                entry.get_mut().push((input, chunks));
-            }
-            hash_map::Entry::Vacant(entry) => {
-                entry.insert(vec![(input, chunks)]);
-            }
-        }
-    }
-    Ok(chunk_map)
+    Ok(results)
 }
 
 /// Spawns chunk streaming tasks.
@@ -86,7 +62,7 @@ pub async fn chunk_streams<T>(
     ctx: Arc<Context>,
     chunkers: Vec<ChunkerId>,
     input_broadcast_tx: broadcast::Sender<(usize, T)>,
-) -> Result<HashMap<ChunkerId, ChunkStream<T>>, Error>
+) -> Result<HashMap<ChunkerId, ChunkStream>, Error>
 where
     T: ToString + Clone + Send + 'static,
 {
@@ -95,15 +71,12 @@ where
 
 /// Spawns text contents detection tasks.
 /// Returns a vec of detections.
-pub async fn text_contents_detections<T>(
+pub async fn text_contents_detections(
     ctx: Arc<Context>,
     detectors: Vec<(DetectorId, DetectorParams)>,
-    chunks: HashMap<ChunkerId, Vec<Chunked<T>>>,
-) -> Result<Vec<(DetectorId, Detections)>, Error>
-where
-    T: ToString + Clone + Send + 'static,
-{
-    let detect_inputs = detectors
+    chunks: HashMap<ChunkerId, Chunks>,
+) -> Result<Vec<(DetectorId, Detections)>, Error> {
+    let inputs = detectors
         .iter()
         .map(|(detector_id, params)| {
             let config = ctx
@@ -111,18 +84,12 @@ where
                 .detectors
                 .get(detector_id)
                 .ok_or_else(|| Error::DetectorNotFound(detector_id.clone()))?;
-            // TODO: review further
-            let chunks = chunks
-                .get(&config.chunker_id)
-                .unwrap()
-                .iter()
-                .flat_map(|(_input, chunks)| chunks.clone())
-                .collect::<Vec<_>>();
+            let chunks = chunks.get(&config.chunker_id).unwrap().clone();
             Ok::<_, Error>((detector_id.clone(), params.clone(), chunks))
         })
         .collect::<Result<Vec<_>, Error>>()?;
 
-    let results = stream::iter(detect_inputs)
+    let results = stream::iter(inputs)
         .map(|(detector_id, params, chunks)| {
             let ctx = ctx.clone();
             async move {
@@ -131,22 +98,20 @@ where
                 Ok::<_, Error>((detector_id, detections))
             }
         })
-        .buffered(8)
+        .buffer_unordered(8)
         .try_collect::<Vec<_>>()
         .await?;
+
     Ok(results)
 }
 
 /// Spawns text contents detection stream tasks.
 /// Returns a vec of detection streams.
-pub async fn text_contents_detection_streams<T>(
+pub async fn text_contents_detection_streams(
     ctx: Arc<Context>,
     detectors: Vec<(DetectorId, DetectorParams)>,
-    chunk_streams: HashMap<ChunkerId, ChunkStream<T>>,
-) -> Result<Vec<(DetectorId, DetectionStream<T>)>, Error>
-where
-    T: ToString + Clone + Send + 'static,
-{
+    chunk_streams: HashMap<ChunkerId, ChunkStream>,
+) -> Result<Vec<(DetectorId, DetectionStream)>, Error> {
     todo!()
 }
 

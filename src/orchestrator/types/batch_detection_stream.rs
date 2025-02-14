@@ -2,17 +2,17 @@ use futures::{stream, Stream, StreamExt};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
-use super::{DetectionStream, Detections};
+use super::{BoxStream, Chunks, DetectionStream, Detections};
 use crate::orchestrator::Error;
 
 struct DetectionTracker {}
 
-pub struct BatchDetectionStream<T> {
-    inner: ReceiverStream<Result<(T, Detections), Error>>, // TODO: update
+pub struct BatchDetectionStream {
+    inner: BoxStream<Result<(Chunks, Detections), Error>>, // TODO: update
 }
 
-impl<T: Send + 'static> BatchDetectionStream<T> {
-    pub fn new(streams: Vec<DetectionStream<T>>) -> Self {
+impl BatchDetectionStream {
+    pub fn new(streams: Vec<DetectionStream>) -> Self {
         let _n = streams.len();
         let (batch_tx, batch_rx) = mpsc::channel(32);
         let (batcher_tx, mut batcher_rx) = mpsc::channel(32);
@@ -52,18 +52,18 @@ impl<T: Send + 'static> BatchDetectionStream<T> {
         });
 
         Self {
-            inner: ReceiverStream::new(batch_rx),
+            inner: ReceiverStream::new(batch_rx).boxed(),
         }
     }
 }
 
-impl<T> Stream for BatchDetectionStream<T> {
-    type Item = Result<(T, Detections), Error>;
+impl Stream for BatchDetectionStream {
+    type Item = Result<(Chunks, Detections), Error>; // TODO: update
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        self.inner.poll_next_unpin(cx)
+        self.inner.as_mut().poll_next(cx)
     }
 }
