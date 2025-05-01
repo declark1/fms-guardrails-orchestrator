@@ -20,11 +20,13 @@
 pub mod args;
 pub mod clients;
 pub mod config;
+pub mod errors;
 pub mod health;
 pub mod models;
 pub mod orchestrator;
 pub mod pb;
 pub mod server;
+pub mod types;
 pub mod utils;
 #[allow(unused_imports)]
 pub(crate) use utils::AsUriExt;
