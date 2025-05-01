@@ -32,9 +32,9 @@ use super::{
 };
 use crate::{
     config::ServiceConfig,
+    errors::ValidationError,
     health::HealthCheckResult,
-    models::{DetectionWarningReason, DetectorParams, ValidationError},
-    orchestrator,
+    models::{DetectionWarningReason, DetectorParams},
 };
 
 const DEFAULT_PORT: u16 = 8080;
@@ -159,7 +159,7 @@ impl HttpClientExt for OpenAiClient {
 #[derive(Debug)]
 pub enum ChatCompletionsResponse {
     Unary(Box<ChatCompletion>),
-    Streaming(mpsc::Receiver<Result<Option<ChatCompletionChunk>, orchestrator::Error>>),
+    Streaming(mpsc::Receiver<Result<Option<ChatCompletionChunk>, crate::Error>>),
 }
 
 impl From<ChatCompletion> for ChatCompletionsResponse {

@@ -21,6 +21,7 @@ pub mod args;
 pub mod clients;
 pub mod config;
 pub mod errors;
+pub use errors::{Error, ValidationError};
 pub mod health;
 pub mod models;
 pub mod orchestrator;

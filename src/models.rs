@@ -27,6 +27,7 @@ use crate::{
         detector::{ContentAnalysisResponse, ContextType},
         openai::{Content, ContentType},
     },
+    errors::ValidationError,
     health::HealthCheckCache,
     pb,
 };
@@ -95,14 +96,6 @@ pub struct GuardrailsHttpRequest {
     /// Parameters for text generation
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_gen_parameters: Option<GuardrailsTextGenerationParameters>,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum ValidationError {
-    #[error("`{0}` is required")]
-    Required(String),
-    #[error("{0}")]
-    Invalid(String),
 }
 
 impl GuardrailsHttpRequest {

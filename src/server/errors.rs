@@ -23,7 +23,7 @@ use axum::{
 };
 use http::StatusCode;
 
-use crate::{models::ValidationError, orchestrator};
+use crate::errors::ValidationError;
 
 /// High-level errors to return to clients.
 #[derive(Debug, thiserror::Error)]
@@ -46,9 +46,9 @@ pub enum Error {
     IoError(#[from] std::io::Error),
 }
 
-impl From<orchestrator::Error> for Error {
-    fn from(value: orchestrator::Error) -> Self {
-        use orchestrator::Error::*;
+impl From<crate::Error> for Error {
+    fn from(value: crate::Error) -> Self {
+        use crate::Error::*;
         match value {
             DetectorNotFound(_) | ChunkerNotFound(_) => Self::NotFound(value.to_string()),
             DetectorRequestFailed { ref error, .. }

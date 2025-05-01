@@ -43,10 +43,7 @@ use super::{Error, ServerState};
 use crate::{
     clients::openai::{ChatCompletionsRequest, ChatCompletionsResponse},
     models::{self, InfoParams, InfoResponse, StreamingContentDetectionRequest},
-    orchestrator::{
-        self,
-        handlers::{chat_completions_detection::ChatCompletionsDetectionTask, *},
-    },
+    orchestrator::handlers::{chat_completions_detection::ChatCompletionsDetectionTask, *},
     utils::{self, trace::current_trace_id},
 };
 
@@ -216,7 +213,7 @@ async fn stream_content_detection(
                 message.validate()?;
                 Ok(message)
             }
-            Err(error) => Err(orchestrator::errors::Error::Validation(error.to_string())),
+            Err(error) => Err(crate::Error::Validation(error.to_string())),
         })
         .enumerate()
         .boxed();

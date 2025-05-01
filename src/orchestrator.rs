@@ -14,8 +14,6 @@
  limitations under the License.
 
 */
-pub mod errors;
-pub use errors::Error;
 pub mod common;
 pub mod handlers;
 pub mod types;
@@ -35,6 +33,7 @@ use crate::{
         openai::OpenAiClient,
     },
     config::{DetectorType, GenerationProvider, OrchestratorConfig},
+    errors::Error,
     health::HealthCheckCache,
 };
 
