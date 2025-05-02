@@ -26,10 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tokio::sync::mpsc;
 
-use super::{
-    Client, Error, HttpClient, create_http_client, detector::ContentAnalysisResponse,
-    http::HttpClientExt,
-};
+use super::{Client, Error, HttpClient, create_http_client, detector::ContentAnalysisResponse};
 use crate::{
     config::ServiceConfig,
     health::HealthCheckResult,
@@ -64,20 +61,16 @@ impl OpenAiClient {
         })
     }
 
-    pub fn client(&self) -> &HttpClient {
-        &self.client
-    }
-
     pub async fn chat_completions(
         &self,
         request: ChatCompletionsRequest,
         headers: HeaderMap,
     ) -> Result<ChatCompletionsResponse, Error> {
-        let url = self.inner().endpoint(CHAT_COMPLETIONS_ENDPOINT);
+        let url = self.client.endpoint(CHAT_COMPLETIONS_ENDPOINT);
         if request.stream {
             let (tx, rx) = mpsc::channel(32);
             let mut event_stream = self
-                .inner()
+                .client
                 .post(url, headers, request)
                 .await?
                 .0
@@ -147,12 +140,6 @@ impl Client for OpenAiClient {
         } else {
             self.client.health().await
         }
-    }
-}
-
-impl HttpClientExt for OpenAiClient {
-    fn inner(&self) -> &HttpClient {
-        self.client()
     }
 }
 

@@ -41,7 +41,7 @@ use tracing::{Span, error, info, info_span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
-use super::{Client, Error};
+use super::Error;
 use crate::{
     health::{HealthCheckResult, HealthStatus, OptionalHealthCheckResponseBody},
     utils::{AsUriExt, trace},
@@ -108,11 +108,6 @@ pub type HttpClientInner = Trace<
     ClientOnEos,
     ClientOnFailure,
 >;
-
-/// A trait implemented by all clients that use HTTP for their inner client.
-pub trait HttpClientExt: Client {
-    fn inner(&self) -> &HttpClient;
-}
 
 /// An HTTP client wrapping an inner `hyper` HTTP client providing a higher-level API.
 #[derive(Clone)]

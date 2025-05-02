@@ -20,11 +20,10 @@ use hyper::HeaderMap;
 use serde::Serialize;
 use tracing::info;
 
-use super::{DEFAULT_PORT, DetectorClient, DetectorClientExt};
+use super::DetectorClient;
 use crate::{
     clients::{
-        Client, Error, HttpClient, create_http_client,
-        http::HttpClientExt,
+        Client, Error,
         openai::{Message, Tool},
     },
     config::ServiceConfig,
@@ -32,33 +31,18 @@ use crate::{
     models::{DetectionResult, DetectorParams},
 };
 
-const CHAT_DETECTOR_ENDPOINT: &str = "/api/v1/text/chat";
+const TEXT_CHAT_DETECTOR_ENDPOINT: &str = "/api/v1/text/chat";
 
 #[derive(Clone)]
-pub struct TextChatDetectorClient {
-    client: HttpClient,
-    health_client: Option<HttpClient>,
-}
+pub struct TextChatDetectorClient(DetectorClient);
 
 impl TextChatDetectorClient {
     pub async fn new(
         config: &ServiceConfig,
         health_config: Option<&ServiceConfig>,
     ) -> Result<Self, Error> {
-        let client = create_http_client(DEFAULT_PORT, config).await?;
-        let health_client = if let Some(health_config) = health_config {
-            Some(create_http_client(DEFAULT_PORT, health_config).await?)
-        } else {
-            None
-        };
-        Ok(Self {
-            client,
-            health_client,
-        })
-    }
-
-    fn client(&self) -> &HttpClient {
-        &self.client
+        let client = DetectorClient::new(config, health_config).await?;
+        Ok(Self(client))
     }
 
     pub async fn text_chat(
@@ -67,9 +51,9 @@ impl TextChatDetectorClient {
         request: ChatDetectionRequest,
         headers: HeaderMap,
     ) -> Result<Vec<DetectionResult>, Error> {
-        let url = self.endpoint(CHAT_DETECTOR_ENDPOINT);
+        let url = self.0.client.endpoint(TEXT_CHAT_DETECTOR_ENDPOINT);
         info!("sending text chat detector request to {}", url);
-        self.post_to_detector(model_id, url, headers, request).await
+        self.0.handle(model_id, url, request, headers).await
     }
 }
 
@@ -80,19 +64,11 @@ impl Client for TextChatDetectorClient {
     }
 
     async fn health(&self) -> HealthCheckResult {
-        if let Some(health_client) = &self.health_client {
+        if let Some(health_client) = &self.0.health_client {
             health_client.health().await
         } else {
-            self.client.health().await
+            self.0.client.health().await
         }
-    }
-}
-
-impl DetectorClient for TextChatDetectorClient {}
-
-impl HttpClientExt for TextChatDetectorClient {
-    fn inner(&self) -> &HttpClient {
-        self.client()
     }
 }
 

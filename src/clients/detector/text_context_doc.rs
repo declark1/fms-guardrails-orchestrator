@@ -20,41 +20,26 @@ use hyper::HeaderMap;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use super::{DEFAULT_PORT, DetectorClient, DetectorClientExt};
+use super::DetectorClient;
 use crate::{
-    clients::{Client, Error, HttpClient, create_http_client, http::HttpClientExt},
+    clients::{Client, Error},
     config::ServiceConfig,
     health::HealthCheckResult,
     models::{DetectionResult, DetectorParams},
 };
 
-const CONTEXT_DOC_DETECTOR_ENDPOINT: &str = "/api/v1/text/context/doc";
+const TEXT_CONTEXT_DOC_DETECTOR_ENDPOINT: &str = "/api/v1/text/context/doc";
 
 #[derive(Clone)]
-pub struct TextContextDocDetectorClient {
-    client: HttpClient,
-    health_client: Option<HttpClient>,
-}
+pub struct TextContextDocDetectorClient(DetectorClient);
 
 impl TextContextDocDetectorClient {
     pub async fn new(
         config: &ServiceConfig,
         health_config: Option<&ServiceConfig>,
     ) -> Result<Self, Error> {
-        let client = create_http_client(DEFAULT_PORT, config).await?;
-        let health_client = if let Some(health_config) = health_config {
-            Some(create_http_client(DEFAULT_PORT, health_config).await?)
-        } else {
-            None
-        };
-        Ok(Self {
-            client,
-            health_client,
-        })
-    }
-
-    fn client(&self) -> &HttpClient {
-        &self.client
+        let client = DetectorClient::new(config, health_config).await?;
+        Ok(Self(client))
     }
 
     pub async fn text_context_doc(
@@ -63,9 +48,9 @@ impl TextContextDocDetectorClient {
         request: ContextDocsDetectionRequest,
         headers: HeaderMap,
     ) -> Result<Vec<DetectionResult>, Error> {
-        let url = self.endpoint(CONTEXT_DOC_DETECTOR_ENDPOINT);
+        let url = self.0.client.endpoint(TEXT_CONTEXT_DOC_DETECTOR_ENDPOINT);
         info!("sending text context doc detector request to {}", url);
-        self.post_to_detector(model_id, url, headers, request).await
+        self.0.handle(model_id, url, request, headers).await
     }
 }
 
@@ -76,19 +61,11 @@ impl Client for TextContextDocDetectorClient {
     }
 
     async fn health(&self) -> HealthCheckResult {
-        if let Some(health_client) = &self.health_client {
+        if let Some(health_client) = &self.0.health_client {
             health_client.health().await
         } else {
-            self.client.health().await
+            self.0.client.health().await
         }
-    }
-}
-
-impl DetectorClient for TextContextDocDetectorClient {}
-
-impl HttpClientExt for TextContextDocDetectorClient {
-    fn inner(&self) -> &HttpClient {
-        self.client()
     }
 }
 
