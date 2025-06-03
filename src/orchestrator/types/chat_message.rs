@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 /*
  Copyright FMS Guardrails Orchestrator Authors
 
@@ -14,7 +16,7 @@
  limitations under the License.
 
 */
-use crate::clients::openai;
+use crate::clients::openai::{self, Content, ContentType};
 
 /// A chat message.
 #[derive(Default, Clone, Debug, PartialEq)]
@@ -25,7 +27,7 @@ pub struct ChatMessage<'a> {
     /// The role of the author of this message.
     pub role: Option<&'a openai::Role>,
     /// The text contents of the message.
-    pub text: Option<&'a str>,
+    pub text: Option<Cow<'a, str>>,
     /// The refusal message.
     pub refusal: Option<&'a str>,
 }
@@ -39,10 +41,18 @@ pub trait ChatMessageIterator {
 impl ChatMessageIterator for openai::ChatCompletionsRequest {
     fn messages(&self) -> impl Iterator<Item = ChatMessage> {
         self.messages.iter().enumerate().map(|(index, message)| {
-            let text = if let Some(openai::Content::Text(text)) = &message.content {
-                Some(text.as_str())
-            } else {
-                None
+            let text = match &message.content {
+                Some(Content::Text(s)) => Some(Cow::Borrowed(s.as_str())),
+                Some(Content::Array(parts))
+                    if parts.iter().all(|p| matches!(p.r#type, ContentType::Text)) =>
+                {
+                    let text = parts
+                        .iter()
+                        .filter_map(|p| p.text.as_deref())
+                        .collect::<String>();
+                    Some(Cow::Owned(text))
+                }
+                _ => None,
             };
             ChatMessage {
                 index: index as u32,
@@ -59,7 +69,11 @@ impl ChatMessageIterator for openai::ChatCompletion {
         self.choices.iter().map(|choice| ChatMessage {
             index: choice.index,
             role: Some(&choice.message.role),
-            text: choice.message.content.as_deref(),
+            text: choice
+                .message
+                .content
+                .as_ref()
+                .map(|s| Cow::Borrowed(s.as_str())),
             refusal: choice.message.refusal.as_deref(),
         })
     }
@@ -70,7 +84,11 @@ impl ChatMessageIterator for openai::ChatCompletionChunk {
         self.choices.iter().map(|choice| ChatMessage {
             index: choice.index,
             role: choice.delta.role.as_ref(),
-            text: choice.delta.content.as_deref(),
+            text: choice
+                .delta
+                .content
+                .as_ref()
+                .map(|s| Cow::Borrowed(s.as_str())),
             refusal: choice.delta.refusal.as_deref(),
         })
     }
